@@ -1,0 +1,18 @@
+{
+  "name": "Cubase Web Remote Controller",
+  "short_name": "Cubase Ctrl",
+  "description": "Low-latency Live & Studio Remote Control for Steinberg Cubase",
+  "start_url": "/?view=remote",
+  "display": "standalone",
+  "background_color": "#090b10",
+  "theme_color": "#090b10",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
