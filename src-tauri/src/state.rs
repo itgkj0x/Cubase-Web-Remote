@@ -95,6 +95,142 @@ impl MarkerPadConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SongSection {
+    pub id: String,
+    pub name: String,
+    pub start_time: String,
+    #[serde(default)]
+    pub end_time: Option<String>,
+    #[serde(default = "default_section_color")]
+    pub color: String,
+    #[serde(default = "default_section_type")]
+    pub section_type: String,
+    #[serde(default)]
+    pub loop_enabled: bool,
+}
+
+fn default_section_color() -> String {
+    "cyan".to_string()
+}
+fn default_section_type() -> String {
+    "verse".to_string()
+}
+
+impl SongSection {
+    pub fn new(id: &str, name: &str, start_time: &str, color: &str, section_type: &str) -> Self {
+        Self {
+            id: id.to_string(),
+            name: name.to_string(),
+            start_time: start_time.to_string(),
+            end_time: None,
+            color: color.to_string(),
+            section_type: section_type.to_string(),
+            loop_enabled: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SongItem {
+    pub id: String,
+    pub title: String,
+    #[serde(default)]
+    pub artist: String,
+    #[serde(default)]
+    pub key: String,
+    #[serde(default)]
+    pub bpm: String,
+    #[serde(default)]
+    pub duration: String,
+    #[serde(default = "default_start_time")]
+    pub start_time: String,
+    #[serde(default)]
+    pub auto_stop: bool,
+    #[serde(default = "default_song_color")]
+    pub color: String,
+    #[serde(default)]
+    pub notes: String,
+    #[serde(default)]
+    pub lyrics: String,
+    #[serde(default)]
+    pub sections: Vec<SongSection>,
+    #[serde(default)]
+    pub markers: Vec<MarkerPadConfig>,
+}
+
+fn default_start_time() -> String {
+    "1.1.1.0".to_string()
+}
+fn default_song_color() -> String {
+    "cyan".to_string()
+}
+
+impl SongItem {
+    pub fn from_preset(p: &SongPreset) -> Self {
+        let sections = p
+            .markers
+            .iter()
+            .filter(|m| !m.label.is_empty() && (m.index <= 8 || !m.cue_time.is_empty()))
+            .map(|m| {
+                let st = if !m.cue_time.is_empty() {
+                    m.cue_time.clone()
+                } else {
+                    format!("{}.1.1.0", (m.index as u32 - 1) * 8 + 1)
+                };
+                SongSection::new(
+                    &format!("sec-{}", m.index),
+                    &m.label,
+                    &st,
+                    &m.color,
+                    match m.index {
+                        1 => "intro",
+                        2 | 4 => "verse",
+                        3 | 5 => "chorus",
+                        6 => "bridge",
+                        7 => "solo",
+                        _ => "outro",
+                    },
+                )
+            })
+            .collect();
+
+        Self {
+            id: p.id.clone(),
+            title: p.title.clone(),
+            artist: String::new(),
+            key: "C".to_string(),
+            bpm: p.bpm_memo.clone(),
+            duration: "03:30".to_string(),
+            start_time: "1.1.1.0".to_string(),
+            auto_stop: true,
+            color: "cyan".to_string(),
+            notes: p.bpm_memo.clone(),
+            lyrics: String::new(),
+            sections,
+            markers: p.markers.clone(),
+        }
+    }
+
+    pub fn new_default(id: &str, title: &str) -> Self {
+        let preset = SongPreset::new_default(id, title);
+        let mut song = Self::from_preset(&preset);
+        song.sections = vec![
+            SongSection::new("sec-1", "Intro", "1.1.1.0", "amber", "intro"),
+            SongSection::new("sec-2", "Verse 1", "9.1.1.0", "cyan", "verse"),
+            SongSection::new("sec-3", "Chorus 1", "25.1.1.0", "rose", "chorus"),
+            SongSection::new("sec-4", "Verse 2", "41.1.1.0", "cyan", "verse"),
+            SongSection::new("sec-5", "Chorus 2", "57.1.1.0", "rose", "chorus"),
+            SongSection::new("sec-6", "Bridge", "73.1.1.0", "violet", "bridge"),
+            SongSection::new("sec-7", "Last Chorus", "89.1.1.0", "rose", "chorus"),
+            SongSection::new("sec-8", "Outro", "105.1.1.0", "emerald", "outro"),
+        ];
+        song
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SongPreset {
     pub id: String,
     pub title: String,
@@ -118,15 +254,26 @@ impl SongPreset {
 #[serde(rename_all = "camelCase")]
 pub struct SetlistStore {
     pub active_preset_id: String,
+    #[serde(default)]
+    pub songs: Vec<SongItem>,
+    #[serde(default)]
     pub presets: Vec<SongPreset>,
 }
 
 impl Default for SetlistStore {
     fn default() -> Self {
-        let default_song = SongPreset::new_default("song-1", "Default Project");
+        let default_song = SongItem::new_default("song-1", "01. Eclipse (Opening)");
+        let default_song_2 = SongItem::new_default("song-2", "02. Midnight Runner");
+        let default_song_3 = SongItem::new_default("song-3", "03. Starlight (Encore)");
+        
+        let preset_1 = SongPreset::new_default("song-1", "01. Eclipse (Opening)");
+        let preset_2 = SongPreset::new_default("song-2", "02. Midnight Runner");
+        let preset_3 = SongPreset::new_default("song-3", "03. Starlight (Encore)");
+
         Self {
             active_preset_id: default_song.id.clone(),
-            presets: vec![default_song],
+            songs: vec![default_song, default_song_2, default_song_3],
+            presets: vec![preset_1, preset_2, preset_3],
         }
     }
 }
@@ -177,11 +324,18 @@ impl AppSharedState {
         let _ = fs::create_dir_all(&storage_dir);
         let storage_path = storage_dir.join("setlist_presets.json");
 
-        let setlist = if let Ok(raw) = fs::read_to_string(&storage_path) {
+        let mut setlist = if let Ok(raw) = fs::read_to_string(&storage_path) {
             serde_json::from_str::<SetlistStore>(&raw).unwrap_or_default()
         } else {
             SetlistStore::default()
         };
+
+        // Migration: If songs is empty but presets exists, convert presets -> songs
+        if setlist.songs.is_empty() && !setlist.presets.is_empty() {
+            setlist.songs = setlist.presets.iter().map(SongItem::from_preset).collect();
+        } else if setlist.songs.is_empty() {
+            setlist = SetlistStore::default();
+        }
 
         let (tx, _) = broadcast::channel(256);
 

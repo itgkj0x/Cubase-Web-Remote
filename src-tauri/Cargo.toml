@@ -1,6 +1,6 @@
 [package]
 name = "cubase-web-remote"
-version = "0.1.0"
+version = "2.0.0"
 description = "Low-latency Web Remote Controller for Steinberg Cubase 15 Pro"
 authors = ["CubaseWebRemote"]
 edition = "2021"

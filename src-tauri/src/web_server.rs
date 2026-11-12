@@ -1,5 +1,7 @@
 use crate::midi_bridge::{list_midi_ports, MidiBridgeHandle, MidiPortList};
-use crate::state::{AppSharedState, MarkerPadConfig, ServerEvent, SongPreset};
+use crate::state::{
+    AppSharedState, MarkerPadConfig, ServerEvent, SongItem, SongPreset, SongSection,
+};
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -96,6 +98,45 @@ pub enum ClientCommand {
     },
     #[serde(rename_all = "camelCase")]
     DeletePreset { preset_id: String },
+    // AbleSet 3 Style Commands:
+    #[serde(rename_all = "camelCase")]
+    SelectSong { song_id: String },
+    #[serde(rename_all = "camelCase")]
+    ReorderSongs { song_ids: Vec<String> },
+    #[serde(rename_all = "camelCase")]
+    CreateSong {
+        title: String,
+        bpm: String,
+        key: String,
+    },
+    #[serde(rename_all = "camelCase")]
+    UpdateSong { song: SongItem },
+    #[serde(rename_all = "camelCase")]
+    DeleteSong { song_id: String },
+    #[serde(rename_all = "camelCase")]
+    AddSection {
+        song_id: String,
+        section: SongSection,
+    },
+    #[serde(rename_all = "camelCase")]
+    UpdateSection {
+        song_id: String,
+        section: SongSection,
+    },
+    #[serde(rename_all = "camelCase")]
+    DeleteSection {
+        song_id: String,
+        section_id: String,
+    },
+    #[serde(rename_all = "camelCase")]
+    ToggleAutoStop { song_id: String },
+    #[serde(rename_all = "camelCase")]
+    ToggleQuickLoop {
+        song_id: String,
+        section_id: String,
+    },
+    #[serde(rename_all = "camelCase")]
+    ImportSetlist { raw_text: String },
 }
 
 pub fn get_cubase_script_target_path() -> PathBuf {
@@ -412,9 +453,13 @@ fn process_client_command(
             };
             let mut preset = SongPreset::new_default(&new_id, &clean_title);
             preset.bpm_memo = bpm_memo.trim().to_string();
+            let mut song = SongItem::new_default(&new_id, &clean_title);
+            song.bpm = bpm_memo.trim().to_string();
+            song.notes = bpm_memo.trim().to_string();
             {
                 let mut store = ctx.state.setlist.write();
                 store.presets.push(preset);
+                store.songs.push(song);
                 store.active_preset_id = new_id;
             }
             ctx.state.save_setlist();
@@ -432,6 +477,13 @@ fn process_client_command(
                     }
                     p.bpm_memo = bpm_memo.trim().to_string();
                 }
+                if let Some(s) = store.songs.iter_mut().find(|s| s.id == preset_id) {
+                    if !title.trim().is_empty() {
+                        s.title = title.trim().to_string();
+                    }
+                    s.bpm = bpm_memo.trim().to_string();
+                    s.notes = bpm_memo.trim().to_string();
+                }
             }
             ctx.state.save_setlist();
         }
@@ -440,14 +492,184 @@ fn process_client_command(
                 let mut store = ctx.state.setlist.write();
                 if store.presets.len() > 1 {
                     store.presets.retain(|p| p.id != preset_id);
+                    store.songs.retain(|s| s.id != preset_id);
                     if store.active_preset_id == preset_id {
-                        if let Some(first) = store.presets.first() {
+                        if let Some(first) = store.songs.first() {
+                            store.active_preset_id = first.id.clone();
+                        } else if let Some(first) = store.presets.first() {
                             store.active_preset_id = first.id.clone();
                         }
                     }
                 }
             }
             ctx.state.save_setlist();
+        }
+        ClientCommand::SelectSong { song_id } => {
+            {
+                let mut store = ctx.state.setlist.write();
+                if store.songs.iter().any(|s| s.id == song_id) {
+                    store.active_preset_id = song_id.clone();
+                }
+            }
+            ctx.state.save_setlist();
+        }
+        ClientCommand::ReorderSongs { song_ids } => {
+            {
+                let mut store = ctx.state.setlist.write();
+                let mut new_songs = Vec::new();
+                for id in &song_ids {
+                    if let Some(song) = store.songs.iter().find(|s| &s.id == id).cloned() {
+                        new_songs.push(song);
+                    }
+                }
+                // Append any unmentioned songs
+                for song in &store.songs {
+                    if !song_ids.contains(&song.id) {
+                        new_songs.push(song.clone());
+                    }
+                }
+                store.songs = new_songs;
+            }
+            ctx.state.save_setlist();
+        }
+        ClientCommand::CreateSong { title, bpm, key } => {
+            let ts = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(1);
+            let new_id = format!("song-{}", ts);
+            let clean_title = if title.trim().is_empty() {
+                "New Song".to_string()
+            } else {
+                title.trim().to_string()
+            };
+            let mut song = SongItem::new_default(&new_id, &clean_title);
+            song.bpm = bpm.trim().to_string();
+            song.notes = bpm.trim().to_string();
+            if !key.trim().is_empty() {
+                song.key = key.trim().to_string();
+            }
+            {
+                let mut store = ctx.state.setlist.write();
+                store.songs.push(song);
+                store.active_preset_id = new_id;
+            }
+            ctx.state.save_setlist();
+        }
+        ClientCommand::UpdateSong { song } => {
+            {
+                let mut store = ctx.state.setlist.write();
+                if let Some(pos) = store.songs.iter().position(|s| s.id == song.id) {
+                    store.songs[pos] = song;
+                }
+            }
+            ctx.state.save_setlist();
+        }
+        ClientCommand::DeleteSong { song_id } => {
+            {
+                let mut store = ctx.state.setlist.write();
+                if store.songs.len() > 1 {
+                    store.songs.retain(|s| s.id != song_id);
+                    store.presets.retain(|p| p.id != song_id);
+                    if store.active_preset_id == song_id {
+                        if let Some(first) = store.songs.first() {
+                            store.active_preset_id = first.id.clone();
+                        }
+                    }
+                }
+            }
+            ctx.state.save_setlist();
+        }
+        ClientCommand::AddSection { song_id, section } => {
+            {
+                let mut store = ctx.state.setlist.write();
+                if let Some(song) = store.songs.iter_mut().find(|s| s.id == song_id) {
+                    song.sections.push(section);
+                }
+            }
+            ctx.state.save_setlist();
+        }
+        ClientCommand::UpdateSection { song_id, section } => {
+            {
+                let mut store = ctx.state.setlist.write();
+                if let Some(song) = store.songs.iter_mut().find(|s| s.id == song_id) {
+                    if let Some(pos) = song.sections.iter().position(|sec| sec.id == section.id) {
+                        song.sections[pos] = section;
+                    }
+                }
+            }
+            ctx.state.save_setlist();
+        }
+        ClientCommand::DeleteSection {
+            song_id,
+            section_id,
+        } => {
+            {
+                let mut store = ctx.state.setlist.write();
+                if let Some(song) = store.songs.iter_mut().find(|s| s.id == song_id) {
+                    song.sections.retain(|sec| sec.id != section_id);
+                }
+            }
+            ctx.state.save_setlist();
+        }
+        ClientCommand::ToggleAutoStop { song_id } => {
+            {
+                let mut store = ctx.state.setlist.write();
+                if let Some(song) = store.songs.iter_mut().find(|s| s.id == song_id) {
+                    song.auto_stop = !song.auto_stop;
+                }
+            }
+            ctx.state.save_setlist();
+        }
+        ClientCommand::ToggleQuickLoop {
+            song_id,
+            section_id,
+        } => {
+            let mut will_loop = false;
+            let mut target_start = String::new();
+            {
+                let mut store = ctx.state.setlist.write();
+                if let Some(song) = store.songs.iter_mut().find(|s| s.id == song_id) {
+                    if let Some(sec) = song.sections.iter_mut().find(|sec| sec.id == section_id) {
+                        sec.loop_enabled = !sec.loop_enabled;
+                        will_loop = sec.loop_enabled;
+                        target_start = sec.start_time.clone();
+                    }
+                }
+            }
+            ctx.state.save_setlist();
+            if will_loop && !target_start.is_empty() {
+                // Engage cycle loop on Cubase
+                ctx.midi.trigger_cc(13); // Cycle toggle
+            }
+        }
+        ClientCommand::ImportSetlist { raw_text } => {
+            let lines: Vec<&str> = raw_text.lines().map(|l| l.trim()).filter(|l| !l.is_empty()).collect();
+            if !lines.is_empty() {
+                let mut new_songs = Vec::new();
+                for (i, line) in lines.iter().enumerate() {
+                    let clean_title = line
+                        .trim_start_matches(|c: char| c.is_ascii_digit() || c == '.' || c == '-' || c == '、' || c == ' ')
+                        .trim();
+                    let final_title = if clean_title.is_empty() {
+                        format!("Song {}", i + 1)
+                    } else {
+                        clean_title.to_string()
+                    };
+                    let song_id = format!("imported-{}", i + 1);
+                    let mut song = SongItem::new_default(&song_id, &final_title);
+                    song.start_time = format!("{}.1.1.0", i * 64 + 1);
+                    new_songs.push(song);
+                }
+                {
+                    let mut store = ctx.state.setlist.write();
+                    if let Some(first) = new_songs.first() {
+                        store.active_preset_id = first.id.clone();
+                    }
+                    store.songs = new_songs;
+                }
+                ctx.state.save_setlist();
+            }
         }
     }
 }
